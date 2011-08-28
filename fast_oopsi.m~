@@ -116,10 +116,10 @@ if V.fast_iter_max>1;
 end
 
 % normalize F if it is only a trace
-if V.Npixels==1
-    F=detrend(F);
-    F=F-min(F)+eps;
-end
+% if V.Npixels==1
+%     F=detrend(F);
+%     F=F-min(F)+eps;
+% end
 
 %% set default model Parameters
 
@@ -235,8 +235,7 @@ P_best      = orderfields(P_best);
             e       = 1/(2*P.sig^2);            % scale of variance
             H1(d0)  = 2*e*aa;                   % for Hess
         end
-        lnprior     = llam.*sum(M,2);            % for grad
-        grad_const  = M'*llam
+        grad_lnprior  = M'*llam;                  % for grad
         
         
         % find C = argmin_{C_z} lik + prior + barrier_z
@@ -268,14 +267,14 @@ P_best      = orderfields(P_best);
                 else
                     glik    = -2*e*(aF-aa.*C-ba);  % gradient
                 end
-                g       = glik + grad_const - z*M'*(n.^-1);
+                g       = glik + grad_lnprior - z*M'*(n.^-1);
                 H2(d0)  = n.^-2;                % log barrier part of the Hessian
                 H       = H1 + z*(M'*H2*M);     % Hessian
                 d   = -H\g;                     % direction to step using newton-raphson
                 hit = -n./(M*d);                % step within constraint boundaries
-                hit(hit<0)=[];                  % ignore negative hits
+                hit=hit(hit>0);
                 if any(hit<1)
-                    s = min(1,0.99*min(hit(hit>0)));
+                    s = min(1,0.99*min(hit));
                 else
                     s = 1;
                 end
@@ -300,7 +299,7 @@ P_best      = orderfields(P_best);
                     if s<1e-20; disp('reducing s further did not increase likelihood'), break; end      % if decreasing step size just doesn't do it
                 end
                 C    = C1;                      % update C
-                post = post1;                   % update post
+                post = post1                   % update post
             end
             z=z/10;                             % reduce z (sequence of z reductions is arbitrary)
         end

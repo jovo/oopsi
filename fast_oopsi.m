@@ -67,7 +67,7 @@ function [n_best P_best V C]=fast_oopsi(F,V,P)
 %% initialize algorithm Variables
 starttime   = cputime;
 siz         = size(F);      if siz(2)==1, F=F'; siz=size(F); end
-
+j=0;
 % variables determined by the data
 if nargin < 2,              V   = struct;       end
 if ~isfield(V,'Ncells'),    V.Ncells = 1;       end     % # of cells in image
@@ -116,10 +116,10 @@ if V.fast_iter_max>1;
 end
 
 % normalize F if it is only a trace
-% if V.Npixels==1
-%     F=detrend(F);
-%     F=F-min(F)+eps;
-% end
+if V.Npixels==1
+    F=detrend(F);
+    F=F-min(F)+eps;
+end
 
 %% set default model Parameters
 
@@ -207,6 +207,8 @@ V           = orderfields(V);                   % order fields alphabetically to
 P_best      = orderfields(P_best);
 % n_best      = n_best./repmat(max(n_best),V.T,1);
 
+P_best.j=j;
+
 %% fast filter function
     function [n C post] = est_MAP(F,P)
         
@@ -233,7 +235,7 @@ P_best      = orderfields(P_best);
             aa      = repmat(diag(P.a'*P.a),V.T,1);% for grad
             aF      = P.a'*F; aF=aF(:);         % for grad
             e       = 1/(2*P.sig^2);            % scale of variance
-            H1(d0)  = 2*e*aa;                   % for Hess
+            H1(d0)  = -2*e*aa;                   % for Hess
         end
         grad_lnprior  = M'*llam;                  % for grad
         
@@ -269,8 +271,8 @@ P_best      = orderfields(P_best);
                 end
                 g       = glik + grad_lnprior - z*M'*(n.^-1);
                 H2(d0)  = n.^-2;                % log barrier part of the Hessian
-                H       = H1 + z*(M'*H2*M);     % Hessian
-                d   = -H\g;                     % direction to step using newton-raphson
+                H       = H1 - z*(M'*H2*M);     % Hessian
+                d   = H\g;                     % direction to step using newton-raphson
                 hit = -n./(M*d);                % step within constraint boundaries
                 hit=hit(hit>0);
                 if any(hit<1)
@@ -296,6 +298,7 @@ P_best      = orderfields(P_best);
                     end
                     post1 = lik1 + llam'*n - z*sum(log(n));
                     s   = s/5;                  % if step increases objective function, decrease step size
+
                     if s<1e-20; disp('reducing s further did not increase likelihood'), break; end      % if decreasing step size just doesn't do it
                 end
                 C    = C1;                      % update C
