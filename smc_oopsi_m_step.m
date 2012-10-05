@@ -55,23 +55,26 @@ if V.smc_plot
     subplot(4,1,4), cla,hold on,
     if isfield(V,'n'), stem(V.n,'Marker','.',...
             'MarkerSize',20,'LineWidth',2,'Color',[.75 .75 .75]); end
-    stem(M.nbar,'Marker','none','LineWidth',2,'Color',[0 .5 0]);
-    ylabel('best n');
-    axis([0 V.T 0 1]);
+    stem(M.nbar,'Marker','none','LineWidth',2,'Color',[0 .5 0])
+    ylabel('best n')
+    axis([0 V.T 0 1]),
+
+
     drawnow
-    %sound(3*sin(linspace(0,90*pi,2000)))        % play sound to indicate iteration is over
 end
 
 if i>=V.smc_iter_max
     P.conv=true;
 end
 
+
+
     function Enew = update_params(V,S,M,E,F)
         Enew = E;   % initialize parameters
         lik = [];   % initialize likelihood
 
         optionsQP   = optimset('Display','off');
-        optionsGLM  = optimset('Display','off','GradObj','off','TolFun',1e-6,'LargeScale','off');
+        optionsGLM  = optimset('Display','off','GradObj','off','TolFun',1e-6);
 
         %% MLE for spiking parameters
         if V.est_n == true
@@ -80,51 +83,33 @@ end
             RateParams=E.k;                                     % vector of parameters to estimate (changes depending on user input of which parameters to estimate)
             sp      = S.n==1;                                   % find (particles,time step) pairs that spike
             nosp    = S.n==0;                                   % don't spike
-            %             x       = repmat(V.x,1,V.Nparticles);                        % generate matrix for gradinent
+%             x       = repmat(V.x,1,V.Nparticles);                        % generate matrix for gradinent
             zeroy   = zeros(V.Nparticles,V.T);                           % make matrix of zeros for evaluating lik
 
-            efunc = @(z) -V.spikegen.LLdata_for_spikeparams(z, S, P, V);
-            if V.Nspikehist == 0 && ismember(lower(V.spikegen.name), {'bernoulli','poisson'})
-                Enew.k = mean(sum(S.n.*S.w_b));                
-                Enew.lik_r   = -efunc(Enew.k);
+            if V.est_h == true
+                if V.Nspikehist>0                                        % if spike history terms are present
+                    RateParams=[RateParams; E.omega];           % also estimate omega
+%                     for i=1:V.Nspikehist                                 % and modify stimulus matrix for gradient
+%                         x(V.StimDim+i,:)=reshape(S.h(:,:,i),1,V.Nparticles*V.T);
+%                     end
+                end
+
+                %[bko lik_r] = fminunc(@f_bko,RateParams,optionsGLM);% find MLE
+                Z=ones(size(RateParams));
+                [bko lik_r]=fmincon(@f_bko,RateParams,[],[],[],[],-10*Z,10*Z,[],optionsGLM);%fix for h-problem
+                Enew.k      = bko(1:end-V.Nspikehist);                   % set new parameter estimes
+                if V.Nspikehist>0, Enew.omega = bko(end-V.Nspikehist+1:end); end  % for omega too
             else
-                
-                if V.est_h == true && V.Nspikehist > 0
-                    z0 = [E.k E.omega];
-                else
-                    z0 = E.k;
+                if V.Nspikehist>0                                        % if spike history terms are present
+                    for i=1:V.Nspikehist                                 % and modify stimulus matrix for gradient
+                        x(V.StimDim+i,:)=reshape(S.h(:,:,i),1,V.Nparticles*V.T);
+                    end
                 end
-                [best_z, neglik] = fminunc(efunc, z0, optionsGLM);
-                Enew.k = best_z(1:end-V.Nspikehist);
-                if V.est_h == true && V.Nspikehist > 0
-                    Enew.omega = best_z(end-V.Nspikehist + 1:end);
-                end
-                Enew.lik_r   = -neglik;
+
+                [bk lik_r]  = fminunc(@f_bk,RateParams,optionsGLM); % find MLE
+                Enew.k      = bk(1:end);                        % set new parameter estimes
             end
-            
-%           old version has been commented out. was bernoulli-only and may have contained bugs --dg
-%             if V.est_h == true %whether or not to estimate the filter denoted by "w" in Vogelstein et. al 2009
-% 
-%                 if V.Nspikehist>0                                        % if spike history terms are present
-%                     RateParams=[RateParams; E.omega];           % also estimate omega
-%                     %                     for i=1:V.Nspikehist                                 % and modify stimulus matrix for gradient
-%                     %                         x(V.StimDim+i,:)=reshape(S.h(:,:,i),1,V.Nparticles*V.T);
-%                     %                     end
-%                 end
-%                 %[bko neglik] = fminunc(@f_bko,RateParams,optionsGLM);% find MLE
-%                 Z=ones(size(RateParams));
-%                 [bko neglik]=fmincon(@f_bko,RateParams,[],[],[],[],-10*Z,10*Z,[],optionsGLM);%fix for h-problem
-%                 Enew.k      = bko(1:end-V.Nspikehist);                   % set new parameter estimes
-%                 if V.Nspikehist>0, Enew.omega = bko(end-V.Nspikehist+1:end); end  % for omega too
-%             else
-%                 for i=1:V.Nspikehist                                 % and modify stimulus matrix for gradient
-%                     x(V.StimDim+i,:)=reshape(S.h(:,:,i),1,V.Nparticles*V.T);
-%                 end
-%                 [bk neglik]  = fminunc(@f_bk,RateParams,optionsGLM); % find MLE
-%                 Enew.k      = bk(1:end);                        % set new parameter estimes
-%             end
-%               Enew.lik_r   = -neglik;
-            
+            Enew.lik_r   = -lik_r;
             lik = [lik Enew.lik_r];
         end
 
@@ -165,8 +150,7 @@ end
         end %function f_bko
 
         %% MLE for calcium parameters
-        if V.est_c == true && ~V.CaBaselineDrift
-            
+        if V.est_c == true
             fprintf('estimating calcium parammeters\n')
             if V.est_t == 0
                 [ve_x fval] = quadprog(M.Q(2:3,2:3), M.L(2:3),[],[],[],[],[0 0],[inf inf],[E.A E.C_0/E.tau_c]+eps,optionsQP);
@@ -183,11 +167,9 @@ end
             Enew.sigma_c= sqrt(fval/(M.J*V.dt));                % factor in dt
             Enew.lik_c  = - fval/(Enew.sigma_c*sqrt(V.dt)) - M.J*log(Enew.sigma_c);
             lik = [lik Enew.lik_c];
-
+            
             Enew.a         = V.dt/E.tau_c;                      % for brevity
             Enew.sig2_c    = E.sigma_c^2*V.dt;                  % for brevity
-        elseif V.CaBaselineDrift
-            warning('calcium parameter estimation is not yet implemented for baseline drift models, and will be skipped');
         end
 
         % % %% MLE for spike history parameters
@@ -198,34 +180,14 @@ end
         %% MLE for observation parameters
 
         if V.est_F == true
-            keyboard
             fprintf('estimating observation parammeters\n')
             ab_0            = [E.alpha E.beta];
             [Enew.lik_o ab] = f1_ab(ab_0);
-
             Enew.alpha = ab(1);
             Enew.beta  = ab(2);
             Enew.zeta=E.zeta*ab(3);
             Enew.gamma = E.gamma*ab(3);
             lik = [lik Enew.lik_o];
-
-            % Sbar    = Hill_v1(E,sum(S.w_b.*S.C));
-            % siginv  = 1./sqrt([E.gamma*Sbar+E.zeta]);
-            %
-            % ab_1    = [Sbar.*siginv; siginv]'\(F.*siginv)';
-            % resid   = F - ab_1(1)*Sbar - ab_1(2);
-            %
-            % X=[Sbar; 1+0*Sbar]';
-            % H=X'*X;
-            % f=-resid*X;
-            % zg_1    = quadprog(H,f,-X,zeros(1,V.T));
-            % zg_1    = [Sbar; 1+0*resid]'\resid';
-            %
-            % Enew.alpha  = ab_1(1);
-            % Enew.beta   = ab_1(2);
-            % Enew.zeta   = zg_1(1); %if Enew.zeta<0, Enew.zeta=0; end
-            % Enew.gamma  = zg_1(2);
-
         end
 
         function [lik x] = f1_ab(ab_o)
