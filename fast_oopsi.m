@@ -123,6 +123,8 @@ end
 
 %% set default model Parameters
 
+
+
 if nargin < 3,          P       = struct;                       end
 if ~isfield(P,'sig'),   P.sig   = mean(mad(F',1)*1.4826);       end
 if ~isfield(P,'gam'),   P.gam   = (1-V.dt/1)*ones(V.Ncells,1);  end

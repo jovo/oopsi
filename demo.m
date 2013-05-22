@@ -7,7 +7,7 @@ V.dt    = 1/8;  % time step size
 % initialize params
 P.a     = 1;    % observation scale
 P.b     = 0;    % observation bias
-tau     = 1;    % decay time constant
+tau     = 1.5;    % decay time constant
 P.gam   = 1-V.dt/tau; % C(t) = gam*C(t-1)
 P.lam   = 0.1;  % firing rate = lam*dt
 P.sig   = 0.1;  % standard deviation of observation noise 
