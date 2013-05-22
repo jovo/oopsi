@@ -21,19 +21,12 @@ if ~isfield(V,'scan'),  V.scan  = 0;            end     % epi or scan
 if ~isfield(V,'name'),  V.name  ='oopsi';       end     % name for output and figure
 if ~isfield(V,'Nparticles'),	V.Nparticles    = 99; 	end % # particles
 if ~isfield(V,'Nspikehist'),    V.Nspikehist	= 0; 	end % # of spike history terms
-if ~isfield(V,'CaBaselineDrift'), V.CaBaselineDrift = 0; end %whether to include baseline drift in resting calcium concentration
-if V.CaBaselineDrift && V.freq > 1
-    warning('baseline drift is not supported for intermittent sampling, using fixed baseline instead');
-    V.CaBaselineDrift = 0;
-end
 if ~isfield(V,'condsamp'),    	V.condsamp 		= 1;    end % whether to use conditional sampler
-
 if ~isfield(V,'ignorelik'),  	V.ignorelik		= 1; 	end % epi or scan
 if ~isfield(V,'true_n'),                        % if true spikes are not available
     V.use_true_n = 0;                           % don't use them for anything
 else
     V.use_true_n = 1;
-    V.true_n     = repmat(V.true_n',V.Nparticles,1);
 end
 if ~isfield(V,'smc_iter_max'),                          % max # of iterations before convergence
     reply = str2double(input('\nhow many EM iterations would you like to perform \nto estimate parameters (0 means use default parameters): ', 's'));
@@ -57,30 +50,15 @@ if ~isfield(V,'smc_plot'),  V.smc_plot  = 1;    end     % plot results with each
 if nargin < 3,          P       = struct;       end
 if ~isfield(P,'tau_c'), P.tau_c = 1;            end     % calcium decay time constant (sec)
 if ~isfield(P,'A'),     P.A     = 50;           end     % change ins [Ca++] after a spike (\mu M)
-if ~isfield(P,'C_0'),   P.C_0   = 30;            end     % baseline [Ca++] (\mu M)
-if ~isfield(P,'C_init'),P.C_init= 20;            end     % initial [Ca++] (\mu M)
-if ~isfield(P,'sigma_c'),P.sigma_c= 10;         end     % standard deviation of noise (\mu M)
-if ~isfield(P,'sigma_cr'),P.sigma_cr= 10;         end     % standard deviation of noise (\mu M)
+if ~isfield(P,'C_0'),   P.C_0   = 0;            end     % baseline [Ca++] (\mu M)
+if ~isfield(P,'C_init'),P.C_init= 0;            end     % initial [Ca++] (\mu M)
+if ~isfield(P,'sigma_c'),P.sigma_c= 0.1;        end     % standard deviation of noise (\mu M)
 if ~isfield(P,'n'),     P.n     = 1;            end     % hill equation exponent
 if ~isfield(P,'k_d'),   P.k_d   = 200;          end     % hill coefficient
-
-if ~isfield(V,'spikegen')
-    [sg,V] = get_spikegen_info('Bernoulli', P, V);
-    V.spikegen = sg;    
-end
-if V.freq > 1 && ~strcmpi(V.spikegen.name, 'bernoulli')
-    warning('only binary spiking is supported with intermittent sampling, switching to bernoulli spike count distributions');
-    [sg,V] = get_spikegen_info('Bernoulli', P, V);
-    V.spikegen = sg;
-end
-
-if ~isfield(V, 'maxspikes'), V.maxspikes = 15; end
 if ~isfield(P,'k'),                                     % linear filter
     k   = str2double(input('approx. how many spikes underly this trace: ', 's'));
-    P.k = V.spikegen.EFGinv(k / V.T);
-    %P.k = log(-log(1-k/V.T)/V.dt);
+    P.k = log(-log(1-k/V.T)/V.dt);
 end
-
 if ~isfield(P,'alpha'), P.alpha = mean(F);      end     % scale of F
 if ~isfield(P,'beta'),  P.beta  = min(F);       end     % offset of F
 if ~isfield(P,'zeta'),  P.zeta  = P.alpha/5;    end     % constant variance
@@ -94,13 +72,12 @@ if V.Nspikehist==1                                               % if there are 
 end
 if ~isfield(P,'a'),     P.a     = V.dt/P.tau_c; end     % for brevity
 if ~isfield(P,'sig2_c'),P.sig2_c= P.sigma_c^2*V.dt; end % for brevity
-if ~isfield(P,'sig2_cr'),P.sig2_cr= P.sigma_cr^2*V.dt; end % for brevity
 
 %% initialize other stuff
 starttime   = cputime;
 P.lik       = -inf;                                     % we are trying to maximize the likelihood here
 F           = max(F,eps);                               % in case there are any zeros in the F time series
-% P.k = [P.k; 1];
+
 S = smc_oopsi_forward(F,V,P);                           % forward step
 M = smc_oopsi_backward(S,V,P);                          % backward step
 if V.smc_iter_max>1, P.conv=false; else P.conv=true; end

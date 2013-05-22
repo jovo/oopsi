@@ -23,19 +23,11 @@ function S = smc_oopsi_forward(F,V,P)
 fprintf('\nT = %g steps',V.T)
 fprintf('\nforward step:        ')
 P.kx        = P.k'*V.x;
-A.nsmat = ones(V.Nparticles,1) * (0:V.maxspikes);
-A.repmat_msp1 = ones(V.maxspikes + 1,1);
-IsBernoulli = strcmpi(V.spikegen.name, 'bernoulli');
 
 % extize particle info
-S.p     = zeros(V.Nparticles,V.T); %intialize the parameter describing the spiking distribution. in the case of Bernoulli and Poisson, this will also be the rate
-S.n     = zeros(V.Nparticles,V.T);                  % extize spike counts
-S.next_n = zeros(V.Nparticles,1);
+S.p     = zeros(V.Nparticles,V.T);                  % extize rate
+S.n     = false(V.Nparticles,V.T);                  % extize spike counts
 S.C     = P.C_init*ones(V.Nparticles,V.T);          % extize calcium
-if V.CaBaselineDrift
-    S.Cr     = P.C_init*ones(V.Nparticles,V.T);     % extize resting calcium
-    A.epsilon_cr = randn(V.Nparticles,V.T);         % generate noise on Cr
-end
 S.w_f   = 1/V.Nparticles*ones(V.Nparticles,V.T);    % extize forward weights
 S.w_b   = 1/V.Nparticles*ones(V.Nparticles,V.T);    % extize forward weights
 S.Neff  = 1/V.Nparticles*ones(1,V.T_o); 			% extize N_{eff}
@@ -45,11 +37,10 @@ ints        = linspace(0,1,V.Nparticles+1);         % generate intervals
 diffs       = ints(2)-ints(1);              		% generate interval size
 A.U_resamp  = repmat(ints(1:end-1),V.T_o,1)+diffs*rand(V.T_o,V.Nparticles); % resampling matrix
 
-% sample random variables
+% extize misc stuff
 A.U_sampl   = rand(V.Nparticles,V.T);               % random samples
-A.epsilon_c = randn(V.Nparticles,V.T);              % generate noise on C
+A.epsilon_c = sqrt(P.sig2_c)*randn(V.Nparticles,V.T);% generate noise on C
 
-A.constant_spikedistrib = 0;
 if V.Nspikehist>0                                   % if spike histories
     S.h = zeros(V.Nparticles,V.T,V.Nspikehist);     % extize spike history terms
     A.epsilon_h = zeros(V.Nparticles, V.T, V.Nspikehist); % generate noise on h
@@ -57,11 +48,7 @@ if V.Nspikehist>0                                   % if spike histories
         A.epsilon_h(:,:,m) = sqrt(P.sig2_h(m))*randn(V.Nparticles,V.T);
     end
 else                                                % if not, comput P[n_t] for all t
-    S.p = repmat(V.spikegen.nonlinearity(P.kx, P, V)',1,V.Nparticles)';
-    if V.freq == 1 && all(S.p(:) == S.p(1))
-        A.constant_spikedistrib = 1;
-        V.common_ln_n = V.spikegen.logdensity(S.p(:,1)', P, V)'; % compute log(P[n spikes], n = 0,1,2 ... each row is a particle, each column is a spike count
-    end
+    S.p = repmat(1-exp(-exp(P.kx)*V.dt)',1,V.Nparticles)';
 end
 
 % extize stuff needed for conditional sampling
@@ -72,8 +59,8 @@ A.zeroy     = zeros(V.Nparticles,1);        % vector of zeros
 
 % extize stuff needed for REAL backwards sampling
 O.p_o       = zeros(2^(V.freq-1),V.freq);   % extize backwards prob
-mu_o      = zeros(2^(V.freq-1),V.freq);   % extize backwards mean
-sig2_o    = zeros(1,V.freq);              % extize backwards variance
+O.mu_o      = zeros(2^(V.freq-1),V.freq);   % extize backwards mean
+O.sig2_o    = zeros(1,V.freq);              % extize backwards variance
 
 % extize stuff needed for APPROX backwards sampling
 O.p         = zeros(V.freq,V.freq);         % extize backwards prob
@@ -84,11 +71,11 @@ O.sig2      = zeros(V.freq,V.freq);         % extize backwards var
 s           = V.freq;                       % initialize time of next observation
 O.p_o(1,s)  = 1;                            % initialize P[F_s | C_s]
 
-[mu_o(1,s) sig2_o(s)]  = init_lik(P,F(s));
+[O.mu_o(1,s) O.sig2_o(s)]  = init_lik(P,F(s));
 
 O.p(1,s)    = 1;                            % initialize P[F_s | C_s]
-O.mu(1,s)   = mu_o(1,s);                  % initialize mean of P[O_s | C_s]
-O.sig2(1,s) = sig2_o(s);                  % initialize var of P[O_s | C_s]
+O.mu(1,s)   = O.mu_o(1,s);                  % initialize mean of P[O_s | C_s]
+O.sig2(1,s) = O.sig2_o(s);                  % initialize var of P[O_s | C_s]
 
 if V.freq>1                                 % if intermitent sampling
     for tt=s:-1:2                           % generate spike binary matrix
@@ -107,18 +94,13 @@ O = update_moments(V,F,P,S,O,A,s);          % recurse back to get P[O_s | C_s] b
 %% do the particle filter
 
 for t=V.freq+1:V.T-V.freq
-    if IsBernoulli && V.freq > 1 && ~V.CaBaselineDrift && V.condsamp
-        S = cond_sampler_intermittent_bernoulli_nodrift(V,F,P,S,O,A,t,s);
-    elseif V.condsamp==0 || (F(s+V.freq)-P.beta)/P.alpha>0.98 || (F(s+V.freq)-P.beta)/P.alpha<0 % prior sampler with drift when gaussian approximation is not good
+    if V.condsamp==0 || (F(s+V.freq)-P.beta)/P.alpha>0.98 ||(F(s+V.freq)-P.beta)/P.alpha<0
         S = prior_sampler(V,F,P,S,A,t);     % use prior sampler when gaussian approximation is not good
-    else % otherwise use conditional sampler
-        S = cond_sampler_nonintermittent(V,F,P,S,O,A,t,s);
+    else                                    % otherwise use conditional sampler
+        S = cond_sampler(V,F,P,S,O,A,t,s);
     end
 
     S.C(:,t)=S.next_C;                      % done to speed things up for older
-    if V.CaBaselineDrift
-        S.Cr(:,t) = S.next_Cr;
-    end
     S.n(:,t)=S.next_n;                      % matlab, having issues with from-function
     if(isfield(S,'next_w_f'))               % update calls to large structures
         S.w_f(:,t)=S.next_w_f;
@@ -146,12 +128,9 @@ for t=V.freq+1:V.T-V.freq
             [ri,ri]     = sort(rand(V.Nparticles,1));                    % these 3 lines stratified resample
             ind         = ind(ri);
 
-            S.p(:,t-V.freq+1:t)   = S.p(ind,t-V.freq+1:t);      % resample probabilities (necessary?) (yes, i think we need these for the backward step -- dg)
-            S.n(:,t-V.freq+1:t)   = S.n(ind,t-V.freq+1:t);      % resample spikes
+            S.p(:,t-V.freq+1:t)   = S.p(ind,t-V.freq+1:t);      % resample probabilities (necessary?)
+            S.n(:,t-V.freq+1:t)   = S.n(ind,t-V.freq+1:t);      % resample calcium
             S.C(:,t-V.freq+1:t)   = S.C(ind,t-V.freq+1:t);      % resample calcium
-            if V.CaBaselineDrift
-                S.Cr(:,t-V.freq+1:t)   = S.Cr(ind,t-V.freq+1:t);      % resample resting calcium
-            end
             S.w_f(:,t-V.freq+1:t) = 1/V.Nparticles*ones(V.Nparticles,V.freq); % reset weights
             if V.Nspikehist>0                                   % if spike history terms
                 S.h(:,t-V.freq+1:t,:) = S.h(ind,t-V.freq+1:t,:);% resample all h's
@@ -178,26 +157,39 @@ end %for time loop
 end %conditional sampler
 
 %% initialize likelihood
+
 function [mu1 sig1] = init_lik(P,F)
-% get the mean (mu1) and variance (sig1) for P[C_t | F_t]
+%  get the mean (mu1) and variance (sig1) for P[C_t | F_t]
 % compute mean
-num = P.k_d * (P.beta - F);
-denom = F - P.beta - P.alpha;
-ginv = (num ./ denom) .^ (1 / P.n);
-mu1 = ginv;
-
-% compute var
+finv    = ((P.k_d*(F-P.beta))./(P.alpha-F+P.beta)).^(1/P.n); %initialize search with f^{-1}(o)
+mu1     = finv;
 if mu1>0 && imag(mu1)==0
-    mu_nm1power = mu1 .^ (P.n - 1);
-    gprime = P.alpha * P.n * mu_nm1power * P.k_d ./ ((mu1 .* mu_nm1power + P.k_d).^2);
-
-    SCa_at_mu1 = (F - P.beta) / P.alpha;
-    sig1 = (P.gamma * SCa_at_mu1 + P.zeta) ./ (gprime^2);
+    %     options = optimset('Display','off','GradObj','on','Hessian','on');
+    %     mu1     = fminunc(@fnlogL,finv,options);
+    
+    sig1=-1/(-(-P.alpha*mu1^P.n*P.n/mu1/(mu1^P.n+P.k_d)+P.alpha*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1)^2/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)+2*(F-P.alpha*mu1^P.n/(mu1^P.n+P.k_d)-P.beta)/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)^2*(-P.alpha*mu1^P.n*P.n/mu1/(mu1^P.n+P.k_d)+P.alpha*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1)*(P.gamma*mu1^P.n*P.n/mu1/(mu1^P.n+P.k_d)-P.gamma*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1)-(F-P.alpha*mu1^P.n/(mu1^P.n+P.k_d)-P.beta)/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)*(-P.alpha*mu1^P.n*P.n^2/mu1^2/(mu1^P.n+P.k_d)+P.alpha*mu1^P.n*P.n/mu1^2/(mu1^P.n+P.k_d)+3*P.alpha*(mu1^P.n)^2*P.n^2/mu1^2/(mu1^P.n+P.k_d)^2-2*P.alpha*(mu1^P.n)^3/(mu1^P.n+P.k_d)^3*P.n^2/mu1^2-P.alpha*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1^2)-(F-P.alpha*mu1^P.n/(mu1^P.n+P.k_d)-P.beta)^2/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)^3*(P.gamma*mu1^P.n*P.n/mu1/(mu1^P.n+P.k_d)-P.gamma*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1)^2+1/2*(F-P.alpha*mu1^P.n/(mu1^P.n+P.k_d)-P.beta)^2/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)^2*(P.gamma*mu1^P.n*P.n^2/mu1^2/(mu1^P.n+P.k_d)-P.gamma*mu1^P.n*P.n/mu1^2/(mu1^P.n+P.k_d)-3*P.gamma*(mu1^P.n)^2*P.n^2/mu1^2/(mu1^P.n+P.k_d)^2+2*P.gamma*(mu1^P.n)^3/(mu1^P.n+P.k_d)^3*P.n^2/mu1^2+P.gamma*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1^2)-1/2*(P.gamma*mu1^P.n*P.n^2/mu1^2/(mu1^P.n+P.k_d)-P.gamma*mu1^P.n*P.n/mu1^2/(mu1^P.n+P.k_d)-3*P.gamma*(mu1^P.n)^2*P.n^2/mu1^2/(mu1^P.n+P.k_d)^2+2*P.gamma*(mu1^P.n)^3/(mu1^P.n+P.k_d)^3*P.n^2/mu1^2+P.gamma*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1^2)/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)+1/2*(P.gamma*mu1^P.n*P.n/mu1/(mu1^P.n+P.k_d)-P.gamma*(mu1^P.n)^2/(mu1^P.n+P.k_d)^2*P.n/mu1)^2/(P.gamma*mu1^P.n/(mu1^P.n+P.k_d)+P.zeta)^2);
 else
     mu1=0;
     sig1=0;
 end
 
+%     function  [logL dlogL ddlogL] = fnlogL(C)        %this function compute log L = log P(O|H)
+%         logL = (((F-fmu_F(C)).^2)./fvar_F(C)+log(fvar_F(C)))/2;
+%         if nargout > 1
+%             dlogL=-(F-P.alpha*C^P.n/(C^P.n+P.k_d)-P.beta)/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)*(-P.alpha*C^P.n*P.n/C/(C^P.n+P.k_d)+P.alpha*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)+1/2*(F-P.alpha*C^P.n/(C^P.n+P.k_d)-P.beta)^2/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)^2*(2*P.gamma*C^P.n*P.n/C/(C^P.n+P.k_d)-2*P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)-1/2*(P.gamma*C^P.n*P.n/C/(C^P.n+P.k_d)-P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)/(P.gamma*C^P.n/(C^P.n+P.k_d)+P.zeta);
+%             if nargout > 2
+%                 ddlogL=-(-P.alpha*C^P.n*P.n/C/(C^P.n+P.k_d)+P.alpha*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)^2/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)+2*(F-P.alpha*C^P.n/(C^P.n+P.k_d)-P.beta)/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)^2*(-P.alpha*C^P.n*P.n/C/(C^P.n+P.k_d)+P.alpha*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)*(2*P.gamma*C^P.n*P.n/C/(C^P.n+P.k_d)-2*P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)-(F-P.alpha*C^P.n/(C^P.n+P.k_d)-P.beta)/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)*(-P.alpha*C^P.n*P.n^2/C^2/(C^P.n+P.k_d)+P.alpha*C^P.n*P.n/C^2/(C^P.n+P.k_d)+3*P.alpha*(C^P.n)^2*P.n^2/C^2/(C^P.n+P.k_d)^2-2*P.alpha*(C^P.n)^3/(C^P.n+P.k_d)^3*P.n^2/C^2-P.alpha*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C^2)-(F-P.alpha*C^P.n/(C^P.n+P.k_d)-P.beta)^2/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)^3*(2*P.gamma*C^P.n*P.n/C/(C^P.n+P.k_d)-2*P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)^2+1/2*(F-P.alpha*C^P.n/(C^P.n+P.k_d)-P.beta)^2/(2*P.gamma*C^P.n/(C^P.n+P.k_d)+2*P.zeta)^2*(2*P.gamma*C^P.n*P.n^2/C^2/(C^P.n+P.k_d)-2*P.gamma*C^P.n*P.n/C^2/(C^P.n+P.k_d)-6*P.gamma*(C^P.n)^2*P.n^2/C^2/(C^P.n+P.k_d)^2+4*P.gamma*(C^P.n)^3/(C^P.n+P.k_d)^3*P.n^2/C^2+2*P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C^2)-1/2*(P.gamma*C^P.n*P.n^2/C^2/(C^P.n+P.k_d)-P.gamma*C^P.n*P.n/C^2/(C^P.n+P.k_d)-3*P.gamma*(C^P.n)^2*P.n^2/C^2/(C^P.n+P.k_d)^2+2*P.gamma*(C^P.n)^3/(C^P.n+P.k_d)^3*P.n^2/C^2+P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C^2)/(P.gamma*C^P.n/(C^P.n+P.k_d)+P.zeta)+1/2*(P.gamma*C^P.n*P.n/C/(C^P.n+P.k_d)-P.gamma*(C^P.n)^2/(C^P.n+P.k_d)^2*P.n/C)^2/(P.gamma*C^P.n/(C^P.n+P.k_d)+P.zeta)^2;
+%             end
+%         end
+%     end
+
+%     function mu_F = fmu_F(C)        %this function compute E[F]=f(C)
+%         mu_F    = P.alpha*C.^P.n./(C.^P.n+P.k_d)+P.beta;
+%     end
+%
+%     function var_F = fvar_F(C)      %this function compute V[F]=f(C)
+%         var_F   = P.gamma*C.^P.n./(C.^P.n+P.k_d)+P.zeta;
+%     end
 end %init_lik
 
 %% update moments
@@ -209,97 +201,94 @@ s           = V.freq;                   % find next observation time
 
 [mu1 sig1]  = init_lik(P,F(t+s));
 
+O.mu_o(1,s) = mu1;                      % initialize mean of P[O_s | C_s]
+O.sig2_o(s) = sig1;                     % initialize var of P[O_s | C_s]
+
 O.p(1,s)    = 1;                        % initialize P[F_s | C_s]
 O.mu(1,s)   = mu1;                      % initialize mean of P[O_s | C_s]
 O.sig2(1,s) = sig1;                     % initialize var of P[O_s | C_s]
 
-if s > 1
-    if V.CaBaselineDrift
-        error('intermittent sampling + baseline drift is not yet implemented');
-    end
-    if ~strcmpi(V.spikegen.name, 'bernoulli')
-        error('intermittent sampling is only implemented for bernoulli spiking');
-    end
+if V.Nspikehist>0
+    hhat        = zeros(V.freq,V.Nspikehist);                   % extize hhat
+    phat        = zeros(1,V.freq+1);                            % extize phat
 
-    mu_o(1,s) = mu1;                      % initialize mean of P[O_s | C_s]
-    sig2_o(s) = sig1;                     % initialize var of P[O_s | C_s]
+    hs          = S.h(:,t,:);                                   % this is required for matlab to handle a m-by-n-by-p matrix
+    h(:,1:V.Nspikehist)= hs(:,1,1:V.Nspikehist);                % this too
+    hhat(1,:)   = sum(repmat(S.w_f(:,t),1,V.Nspikehist).*h,1);  % initialize hhat
+    phat(1)     = sum(S.w_f(:,t).*S.p(:,t),1);                  % initialize phat
+end
 
-
-    if V.Nspikehist>0
-        hhat        = zeros(V.freq,V.Nspikehist);                   % extize hhat
-        phat        = zeros(1,V.freq+1);                            % extize phat
-
-        hs          = S.h(:,t,:);                                   % this is required for matlab to handle a m-by-n-by-p matrix
-        h(:,1:V.Nspikehist)= hs(:,1,1:V.Nspikehist);                % this too
-        hhat(1,:)   = sum(repmat(S.w_f(:,t),1,V.Nspikehist).*h,1);  % initialize hhat
-        phat(1)     = sum(S.w_f(:,t).*S.p(:,t),1);                  % initialize phat
-    end
-
-    if V.Nspikehist>0
-        for tt=1:s
-            % update hhat
-            for m=1:V.Nspikehist                                    % for each spike history term
-                hhat(tt+1,m)=(1-P.g(m))*hhat(tt,m)+phat(tt);
-            end
-            y_t         = P.kx(tt+t)+P.omega'*hhat(tt+1,:)';        % input to neuron
-            phat(tt+1)  = 1-exp(-exp(y_t)*V.dt);                    % update phat
+if V.Nspikehist>0
+    for tt=1:s
+        % update hhat
+        for m=1:V.Nspikehist                                    % for each spike history term
+            hhat(tt+1,m)=(1-P.g(m))*hhat(tt,m)+phat(tt);
         end
-    else
-        phat  = 1-exp(-exp(P.kx(t+1:t+s)')*V.dt);                   % update phat
+        y_t         = P.kx(tt+t)+P.omega'*hhat(tt+1,:)';        % input to neuron
+        phat(tt+1)  = 1-exp(-exp(y_t)*V.dt);                    % update phat
     end
+else
+    phat  = 1-exp(-exp(P.kx(t+1:t+s)')*V.dt);                   % update phat
+end
 
-    for tt=s:-1:2
+for tt=s:-1:2
+    O.p_o(1:2^(s-tt+1),tt-1)    = repmat(O.p_o(1:2^(s-tt),tt),2,1).*[(1-phat(tt))*ones(1,2^(s-tt)) phat(tt)*ones(1,2^(s-tt))]';
+    O.mu_o(1:2^(s-tt+1),tt-1)   = (1-P.a)^(-1)*(repmat(O.mu_o(1:2^(s-tt),tt),2,1)-P.A*A.spikemat(1:2^(s-tt+1),tt-1)-P.a*P.C_0);     %mean of P[O_s | C_k]
+    O.sig2_o(tt-1)              = (1-P.a)^(-2)*(P.sig2_c+O.sig2_o(tt)); % var of P[O_s | C_k]
 
-        O.p_o(1:2^(s-tt+1),tt-1)    = repmat(O.p_o(1:2^(s-tt),tt),2,1).*[(1-phat(tt))*ones(1,2^(s-tt)) phat(tt)*ones(1,2^(s-tt))]';
-        mu_o(1:2^(s-tt+1),tt-1)   = (1-P.a)^(-1)*(repmat(mu_o(1:2^(s-tt),tt),2,1)-P.A*A.spikemat(1:2^(s-tt+1),tt-1)-P.a*P.C_0);     %mean of P[O_s | C_k]
-        sig2_o(tt-1)              = (1-P.a)^(-2)*(P.sig2_c+sig2_o(tt)); % var of P[O_s | C_k]
-
-        for n=0:s-tt+1
-            nind=A.ninds{n+1};
-            O.p(n+1,tt-1)   = sum(O.p_o(nind,tt-1));
-            ps          = (O.p_o(nind,tt-1)/O.p(n+1,tt-1))';
-            O.mu(n+1,tt-1)  = ps*mu_o(nind,tt-1);
-            O.sig2(n+1,tt-1)= sig2_o(tt-1) + ps*(mu_o(nind,tt-1)-repmat(O.mu(n+1,tt-1)',A.lenn(n+1),1)).^2;
-        end
+    for n=0:s-tt+1
+        nind=A.ninds{n+1};
+        O.p(n+1,tt-1)   = sum(O.p_o(nind,tt-1));
+        ps          = (O.p_o(nind,tt-1)/O.p(n+1,tt-1))';
+        O.mu(n+1,tt-1)  = ps*O.mu_o(nind,tt-1);
+        O.sig2(n+1,tt-1)= O.sig2_o(tt-1) + ps*(O.mu_o(nind,tt-1)-repmat(O.mu(n+1,tt-1)',A.lenn(n+1),1)).^2;
     end
+end
 
-    if s==2
-        O.p     = O.p_o;
-        O.mu    = mu_o;
-        O.sig2  = repmat(sig2_o,2,1);
-        O.sig2(2,2) = 0;
-    end
+if s==2
+    O.p     = O.p_o;
+    O.mu    = O.mu_o;
+    O.sig2  = repmat(O.sig2_o,2,1);
+    O.sig2(2,2) = 0;
+end
 
-    while any(isnan(O.mu(:)))              % in case ps=0/0, which yields a NaN, approximate mu and sig
-        O.mu(1,:)   = mu_o(1,:);
-        O.sig2(1,:) = sig2_o(1,:);
-        ind         = find(isnan(O.mu));
-        O.mu(ind)   = O.mu(ind-1)-P.A;
-        O.sig2(ind) = O.sig2(ind-1);
-    end
+while any(isnan(O.mu(:)))              % in case ps=0/0, which yields a NaN, approximate mu and sig
+    O.mu(1,:)   = O.mu_o(1,:);
+    O.sig2(1,:) = O.sig2_o(1,:);
+    ind         = find(isnan(O.mu));
+    O.mu(ind)   = O.mu(ind-1)-P.A;
+    O.sig2(ind) = O.sig2(ind-1);
 end
 O.p=O.p+eps; % such that there are no actual zeros
 end %function UpdateMoments
 
 %% particle filtering using the prior sampler
+
 function S = prior_sampler(V,F,P,S,A,t)
-S = calc_next_spikedist_params(V,P,S,A,t);
-if V.use_true_n
-    S.next_n    = V.true_n(:,t);
-else
-    den = V.spikegen.density(S.p_new', P, V);
-    for pind = 1:V.Nparticles
-        cden = cumsum([0 den(:,pind)']);
-        cden(end) = 1 + eps;
-        S.next_n(pind,1) = find(A.U_sampl(pind,t) > cden,1,'last') - 1;
+
+if V.Nspikehist>0                                % update noise on h
+    S.h_new=zeros(size(S.n,1),1,V.Nspikehist);
+
+    for m=1:V.Nspikehist
+        S.h_new(:,1,m)=(1-P.g(m))*S.h(:,t-1,m)+S.n(:,t-1)+A.epsilon_h(:,t,m);
     end
-end
-if V.CaBaselineDrift
-    S.next_Cr = S.Cr(:,t-1) + sqrt(P.sig2_cr) * A.epsilon_cr(:,t);
-    S.next_C        = (1-P.a) * S.C(:,t-1) + P.A * S.next_n + P.a * S.Cr(:,t) + sqrt(P.sig2_c) * A.epsilon_c(:,t);% sample C
+
+    % update rate and sample spikes
+    hs          = S.h_new;              % this is required for matlab to handle a m-by-n-by-p matrix
+    h(:,1:V.Nspikehist)  = hs(:,1,1:V.Nspikehist);        % this too
+    y_t         = P.kx(t)+P.omega'*h';  % input to neuron
+    S.p_new     = 1-exp(-exp(y_t)*V.dt);% update rate for those particles with y_t<0
+    S.p_new     = S.p_new(:);
 else
-    S.next_C        = (1-P.a) * S.C(:,t-1) + P.A *S.next_n + P.a*P.C_0 + sqrt(P.sig2_c) * A.epsilon_c(:,t);% sample C
+    S.p_new     = S.p(:,t);
 end
+if ~V.use_true_n
+    S.next_n    = A.U_sampl(:,t)<S.p_new;   % sample n
+else
+    S.next_n    = V.true_n;
+end
+S.next_C        = (1-P.a)*S.C(:,t-1)+P.A*S.next_n+P.a*P.C_0+A.epsilon_c(:,t);% sample C
+
 % get weights at every observation          %THIS NEEDS FIX FOR EPI DATA
 if mod(t,V.freq)==0
     S_mu        = Hill_v1(P,S.next_C);
@@ -316,49 +305,43 @@ end
 
 end
 
-function S = calc_next_spikedist_params(V,P,S,A,t) % if spike histories, sample h and update p
-if V.Nspikehist>0
+%% particle filtering using the CONDITIONAL sampler
+
+function S = cond_sampler(V,F,P,S,O,A,t,s)
+
+% if spike histories, sample h and update p
+if V.Nspikehist>0                                    % update noise on h
     S.h_new=zeros(size(S.n,1),1,V.Nspikehist);
-    for m=1:V.Nspikehist
+    for m=1:V.Nspikehist                             % for each spike history term
         S.h_new(:,1,m)=(1-P.g(m))*S.h(:,t-1,m)+S.n(:,t-1)+A.epsilon_h(:,t,m);
     end
-    % update rate and sample spikes
-    hs          = S.h_new;              % this is required for matlab to handle a m-by-n-by-p matrix
-    h(:,1:V.Nspikehist)  = hs(:,1,1:V.Nspikehist);        % this too
-    y_t         = P.kx(t)+P.omega'*h';  % input to neuron
-    S.p_new     = V.spikegen.nonlinearity(y_t, P, V);
-    %S.p_new     = 1-exp(-exp(y_t)*V.dt);% update rate for those particles with y_t<0
-    S.p_new     = S.p_new(:);
+    hs              = S.h_new;              % this is required for matlab to handle a m-by-n-by-p matrix
+    h(:,1:V.Nspikehist)      = hs(:,1,1:V.Nspikehist);        % this too
+    S.p_new         = 1-exp(-exp(P.kx(t)+P.omega'*h')*V.dt);% update p
+    S.p_new         = S.p_new(:);
 else
     S.p_new         = S.p(:,t);
 end
-end
-
-function S = cond_sampler_intermittent_bernoulli_nodrift(V,F,P,S,O,A,t,s)
-S = calc_next_spikedist_params(V,P,S,A,t);
-k   = V.freq-(t-s)+1;
-A.repmat_ktimes_mat = ones(k,1);
-m2  = O.mu(1:k,t-s);                        % mean of P[O_s | C_k] for n_k=1 and n_k=0
-v2  = O.sig2(1:k,t-s);                      % var of P[O_s | C_k] for n_k=1 and n_k=0
-prev_C = S.C(:,t-1);
 
 % compute P[n_k | h_k]
 ln_n    = [log(S.p_new) log(1-S.p_new)];    % compute [log(spike) log(no spike)]
 
-m0  = (1-P.a) * prev_C + P.a *  P.C_0;         % mean of P[C_k | C_{t-1}, n_k=0]
-m1  = (1-P.a) * prev_C + P.a *  P.C_0 + P.A ;     % mean of P[C_k | C_{t-1}, n_k=1]
+% compute log G_n(n_k | O_s) for n_k=1 and n_k=0
+k   = V.freq-(t-s)+1;
 
-v = P.sig2_c + v2;
-v = v(:,A.oney)';                            % var of G_n(n_k | O_s) for n_k=1 and n_k=0
+m0  = (1-P.a)*S.C(:,t-1)+P.a*P.C_0;         % mean of P[C_k | C_{t-1}, n_k=0]
+m1  = (1-P.a)*S.C(:,t-1)+P.A+P.a*P.C_0;     % mean of P[C_k | C_{t-1}, n_k=1]
 
-%is the -0.5*log(2*pi.*v) term necessary ???
-ln_G0 = -0.5*log(2*pi * v) - 0.5 * (m0(:,A.repmat_ktimes_mat) - m2(:,A.oney)').^2 ./ v;
-ln_G1 = -0.5*log(2*pi * v) - 0.5 * (m1(:,A.repmat_ktimes_mat) - m2(:,A.oney)').^2 ./ v;
+m2  = O.mu(1:k,t-s);                        % mean of P[O_s | C_k] for n_k=1 and n_k=0
+v2  = O.sig2(1:k,t-s);                      % var of P[O_s | C_k] for n_k=1 and n_k=0
+v   = repmat(P.sig2_c+v2',V.Nparticles,1);           % var of G_n(n_k | O_s) for n_k=1 and n_k=0
 
-mx = max(max(ln_G0,[],2),max(ln_G1,[],2));% get max of these
-mx = mx(:,A.repmat_ktimes_mat);
+ln_G0= -0.5*log(2*pi.*v)-.5*(repmat(m0,1,k)-repmat(m2',V.Nparticles,1)).^2./v;   % log G_n(n_k | O_s) for n_k=1 and n_k=0
+ln_G1= -0.5*log(2*pi.*v)-.5*(repmat(m1,1,k)-repmat(m2',V.Nparticles,1)).^2./v;   % log G_n(n_k | O_s) for n_k=1 and n_k=0
 
-%why calculate exp when we're soon going to multiply by something and then take logs again ???
+mx  = max(max(ln_G0,[],2),max(ln_G1,[],2))';% get max of these
+mx  = repmat(mx,k,1)';
+
 G1  = exp(ln_G1-mx);                        % norm dist'n for n=1;
 M1  = G1*O.p(1:k,t-s);                      % times prob of n=1
 
@@ -369,36 +352,38 @@ ln_G    = [log(M1) log(M0)];                % ok, now we actually have the gauss
 
 % compute q(n_k | h_k, O_s)
 ln_q_n  = ln_n + ln_G;                      % log of sampling dist
-mx      = max(ln_q_n,[],2);                 % find max of each row
-mx2     = [mx mx];                          % matricize
-q_n     = exp(ln_q_n-mx2);                  % subtract max to ensure that for each row, there is at least one positive probability, and exponentiate
-sq_n = sum(q_n,2);
-q_n     = q_n ./ [sq_n sq_n];               % normalize to make this a true sampling distribution (ie, sums to 1)
+mx      = max(ln_q_n,[],2);                 % find max of each column
+mx2     = repmat(mx,1,2);                   % matricize
+q_n     = exp(ln_q_n-mx2);                  % subtract max to ensure that for each column, there is at least one positive probability, and exponentiate
+q_n     = q_n./repmat(sum(q_n,2),1,2);      % normalize to make this a true sampling distribution (ie, sums to 1)
 
 % sample n
 S.next_n= A.n_sampl(:,t)<q_n(:,1);          % sample n
 sp      = S.next_n==1;                      % store index of which samples spiked
 nosp    = S.next_n==0;                      % and which did not
 
-% sample C; intermittent, sample from mixture
-% first sample component
-if(isempty(find(sp,1))), sp_i=[];       % handler for empty spike trains
-else [fo,sp_i]   = histc(A.C_sampl(sp,t),[0  cumsum(O.p(1:k-1,t-s))'/sum(O.p(1:k-1,t-s))]); end
-if(isempty(find(nosp,1))), nosp_i=[];   % handle for saturated spike trains
-else [fo,nosp_i] = histc(A.C_sampl(nosp,t),[0  cumsum(O.p(1:k,t-s))'/sum(O.p(1:k,t-s))]); end
+% sample C
+if mod(t,V.freq)==0                         % if not intermittent
+    v       = repmat(O.sig2(1,t-s),V.Nparticles,1);  % get var
+    m       = repmat(O.mu(1,t-s),V.Nparticles,1);    % get mean
+else                                        % if intermittent, sample from mixture
+    % first sample component
+    if(isempty(find(sp,1))), sp_i=[];       % handler for empty spike trains
+    else [fo,sp_i]   = histc(A.C_sampl(sp,t),[0  cumsum(O.p(1:k-1,t-s))'/sum(O.p(1:k-1,t-s))]); end
+    if(isempty(find(nosp,1))), nosp_i=[];   % handle for saturated spike trains
+    else [fo,nosp_i] = histc(A.C_sampl(nosp,t),[0  cumsum(O.p(1:k,t-s))'/sum(O.p(1:k,t-s))]); end
 
-v       = O.sig2(1:k,t-s);              % get var of each component
-v(sp)   = v(sp_i);                      % if particle spiked, then use variance of spiking
-v(nosp) = v(nosp_i);                    % o.w., use non-spiking variance
+    v       = O.sig2(1:k,t-s);              % get var of each component
+    v(sp)   = v(sp_i);                      % if particle spiked, then use variance of spiking
+    v(nosp) = v(nosp_i);                    % o.w., use non-spiking variance
 
-m       = O.mu(1:k,t-s);                % get mean of each component
-m(sp)   = m(sp_i);                      % if particle spiked, use spiking mean
-m(nosp) = m(nosp_i);                    % o.w., use non-spiking mean
-
-v_c         = (1./v + 1/P.sig2_c).^(-1);      %variance of dist'n for sampling C
-m_givenspiking = (1-P.a) * S.C(:,t-1) + P.A * S.next_n + P.a * C_baseline; %expected calcium given spiking and previous calcium value
-m_c         = v_c .* (m ./ v + m_givenspiking / P.sig2_c);%mean of dist'n for sampling C
-S.next_C    = normrnd(m_c, sqrt(v_c));       % sample C
+    m       = O.mu(1:k,t-s);                % get mean of each component
+    m(sp)   = m(sp_i);                      % if particle spiked, use spiking mean
+    m(nosp) = m(nosp_i);                    % o.w., use non-spiking mean
+end
+v_c         = (1./v+1/P.sig2_c).^(-1);      %variance of dist'n for sampling C
+m_c         = v_c.*(m./v+((1-P.a)*S.C(:,t-1)+P.A*S.next_n+P.a*P.C_0)/P.sig2_c);%mean of dist'n for sampling C
+S.next_C    = normrnd(m_c,sqrt(v_c));       % sample C
 
 % update weights
 if mod(t,V.freq)==0                         % at observations compute P(O|H)
@@ -409,102 +394,28 @@ if mod(t,V.freq)==0                         % at observations compute P(O|H)
     F_mu        = P.alpha*S_mu+P.beta;      % compute E[F_t]
     F_var       = P.gamma*S_mu+P.zeta;      % compute V[F_t]
     %%%% log_PO_H must change for epi
-    log_PO_H    = -0.5*(F(t)-F_mu).^2./F_var - log(F_var)/2; % compute log of P[F | H]
-else                                        % when no observations are present, P[F |H] is equal for all particles
+    log_PO_H    = -0.5*(F(t)-F_mu).^2./F_var - log(F_var)/2; % compute log of weights
+else                                        % when no observations are present, P[O|H^{(i)}] are all equal
     log_PO_H    = (1/V.Nparticles)*A.oney;
 end
-
 log_n           = A.oney;                   % extize log sampling spikes
 log_n(sp)       = log(S.p_new(sp));         % compute log P(spike)
 log_n(nosp)     = log(1-S.p_new(nosp));     % compute log P(no spike)
-log_C_Cn        = -0.5*(S.next_C-((1-P.a)*S.C(:,t-1)+P.A*S.next_n+P.a* C_baseline)).^2/P.sig2_c;%log P[C_k | C_{t-1}, n_k]
+log_C_Cn        = -0.5*(S.next_C-((1-P.a)*S.C(:,t-1)+P.A*S.next_n+P.a*P.C_0)).^2/P.sig2_c;%log P[C_k | C_{t-1}, n_k]
 
 log_q_n         = A.oney;                   % initialize log q_n
 log_q_n(sp)     = log(q_n(sp,1));           % compute what was the log prob of sampling a spike
 log_q_n(nosp)   = log(1-q_n(nosp,1));       % or sampling no spike
-log_q_C         = -0.5*(S.next_C - m_c).^2./v_c;% log prob of sampling the C_k that was sampled
+log_q_C         = -0.5*(S.next_C-m_c).^2./v_c;% log prob of sampling the C_k that was sampled
 
-log_quotient    = log_PO_H + log_n + log_C_Cn + log_q_n - log_q_C; %note that terms from baseline drift cancel
+log_quotient    = log_PO_H + log_n + log_C_Cn - log_q_n - log_q_C;
+
 sum_logs        = log_quotient+log(S.w_f(:,t-1));   % update log(weights)
 w               = exp(sum_logs-max(sum_logs));      % exponentiate log(weights)
 S.next_w_f      = w./sum(w);                        % normalize such that they sum to unity
-if any(isnan(w)) %, Fs=1024; ts=0:1/Fs:1; sound(sin(2*pi*ts*200)),
+
+if any(isnan(w)), Fs=1024; ts=0:1/Fs:1; sound(sin(2*pi*ts*200)),
     warning('smc:weights','some weights are NaN')
     keyboard,
 end
-
-end
-
-function S = cond_sampler_nonintermittent(V,F,P,S,O,A,t,s)
-%4 steps: 1)sample n, 2)sample Cr (if drift allowed), 3)sample C, 4)update weights
-mCF  = O.mu;                        % mean of P[F | C_k]
-vCF  = O.sig2;                      % var of P[F | C_k]
-%       ----        STEP 1: Sample n       ----
-if A.constant_spikedistrib %the parameters of the spike count distributions are constant for all particles and time steps
-    ln_n = V.common_ln_n;  % log(P[n spikes], n = 0,1,2 ... each row is a particle, each column is a spike count
-else %the parameters of the spike count distributions can vary over time and particles, due to a stimulus or spike history terms
-    S = calc_next_spikedist_params(V,P,S,A,t);
-    ln_n = V.spikegen.logdensity(S.p_new', P, V)'; % compute log(P[n spikes], n = 0,1,2 ... each row is a particle, each column is a spike count
-end
-prev_C = S.C(:,t-1);
-if V.CaBaselineDrift
-    prev_Cr = S.Cr(:,t-1);
-    mFCrn = (mCF - prev_C(:,A.repmat_msp1) * (1 - P.a) - P.A * A.nsmat) / P.a;  %mFCrn(i,j) is mean P[F | Cr_t, n_t = j-1] for particle i. derived by integrating out C using the rule for a gaussian product integrand
-    vFCr = (vCF + P.sig2_c) / (P.a^2);                                                      %scalar. var of P[F | Cr_t]
-    v = vFCr + P.sig2_cr;                                                      %variance of the gaussian in the formula describing P[F | n] i.e. G_n(n_k | F)
-    ln_G = - 0.5 * (mFCrn - prev_Cr(:,A.repmat_msp1)).^2 / v;    %common terms ignored: - 0.5*log(2*pi*v) - log(P.a)
-else
-    mCC = (1-P.a) * prev_C(:,A.repmat_msp1) + P.a * P_C0 + P.A * A.nsmat;       %mCC(i,j) mean of P[C_k | C_{t-1}, n_k = j-1] for particle i
-    v = P.sig2_c + vCF;
-    ln_G = -0.5*log(2*pi * v) - 0.5 * (mCC - mCF).^2 ./ v; %log G_n(n_k | O_s) for each possible value of n_k:
-end
-ln_q_n  = ln_n + ln_G;                      % log of sampling dist q(n_k | h_k, O_s)
-mx      = max(ln_q_n,[],2);                 % find max of each row
-q_n     = exp(ln_q_n - mx(:,A.repmat_msp1));                  % subtract max to ensure that for each row, there is at least one positive probability, and exponentiate
-sq_n = sum(q_n,2);
-q_n     = q_n ./ sq_n(:,A.repmat_msp1);               % normalize to make this a true sampling distribution (ie, sums to 1)
-cden_mat = cumsum([A.zeroy q_n(:,1:end-1)], 2);
-S.next_n = sum(A.U_sampl(:, t * A.repmat_msp1) > cden_mat,2) - 1;
-%       ----        STEP 2: Sample Cr if baseline is allowed to drift       ----
-if V.CaBaselineDrift %sample Cr
-    mFCrn = (mCF - prev_C * (1 - P.a) - P.A * S.next_n) / P.a; %mean of P[F | Cr_t, n_t = S.next_n]
-    v_cr = (1 ./ vFCr + 1 / P.sig2_cr).^(-1);   % variance of distribution for sampling Cr
-    m_cr = v_cr .* (prev_Cr / P.sig2_cr + mFCrn ./ vFCr); %mean of distribution for sampling Cr
-    S.next_Cr = m_cr + sqrt(v_cr) * A.epsilon_cr(:,t);
-    C_baseline = S.next_Cr;
-else
-    C_baseline = P.C_0;
-end
-%       ----        STEP 3: Sample C       ----
-v_c         = 1/(1/vCF + 1/P.sig2_c);      %variance of dist'n for sampling C
-m_givenspiking = (1-P.a) * S.C(:,t-1) + P.A * S.next_n + P.a * C_baseline; %expected calcium given spiking and previous calcium value
-m_c         = v_c * (mCF / vCF + m_givenspiking / P.sig2_c);%mean of dist'n for sampling C
-S.next_C = m_c + sqrt(v_c) * A.epsilon_c(:,t);
-%       ----        STEP 4: update weights      ----
-S_mu        = Hill_v1(P,S.next_C);
-F_mu        = P.alpha*S_mu+P.beta;      % compute E[F_t | C_t]
-F_var       = P.gamma*S_mu+P.zeta;      % compute V[F_t | C_t]
-log_PF_H    = -0.5*(F(t)-F_mu).^2./F_var - log(F_var)/2; % compute log of P[F | H] !!!MUST CHANGE FOR EPI!!!
-
-direct_ind = (1:V.Nparticles)' + S.next_n * V.Nparticles; %index to access ln_n(pind, S.next_n(pind + 1) for pind = 1:V.nparticles
-log_n = ln_n(direct_ind);
-log_C_Cn        = -0.5*(S.next_C-((1-P.a)*S.C(:,t-1)+P.A*S.next_n+P.a* C_baseline)).^2/P.sig2_c;%log P[C_k | C_{t-1}, n_k]
-
-log_q_n = log(q_n(direct_ind));             % compute what was the log prob of sampling the number of spikes we sampled, for each particle.
-log_q_C         = -0.5*(S.next_C - m_c).^2./v_c;% log prob of sampling the C_k that was sampled
-if V.CaBaselineDrift
-    log_Cr_Cr = -0.5*(S.next_Cr - S.Cr(:,t-1)).^2 / P.sig2_cr;
-    log_q_Cr =  -0.5*(S.next_Cr - m_cr).^2./v_cr ;% log prob of sampling the Cr_k that was sampled
-else
-    log_Cr_Cr = 0;
-    log_q_Cr = 0;
-end
-log_quotient    = log_PF_H + log_n + log_C_Cn + log_Cr_Cr - log_q_n - log_q_C - log_q_Cr; %note that terms from baseline drift cancel
-sum_logs        = log_quotient+log(S.w_f(:,t-1));   % update log(weights)
-w               = exp(sum_logs-max(sum_logs));      % exponentiate log(weights)
-S.next_w_f      = w./sum(w);                        % normalize such that they sum to unity
-if any(isnan(w)) %, Fs=1024; ts=0:1/Fs:1; sound(sin(2*pi*ts*200)),
-    warning('smc:weights','some weights are NaN')
-    keyboard;
-end
-end
+end %condtional sampler
