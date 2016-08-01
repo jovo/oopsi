@@ -64,6 +64,14 @@ function [n_best P_best V C]=fast_oopsi(F,V,P)
 % P_best:   inferred parameter structure
 % V:        structure of Variables for algorithm to run
 
+
+
+%% check data
+
+if any(isnan(F));
+    error('nan in your data')
+end
+
 %% initialize algorithm Variables
 starttime   = cputime;
 siz         = size(F);      if siz(2)==1, F=F'; siz=size(F); end

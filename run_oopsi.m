@@ -20,6 +20,13 @@ function varargout = run_oopsi(F,V,P)
 %   fast:   fast-oopsi MAP estimate of spike train, argmax_{n\geq 0} P[n|F], (fast.n),  parameter estimate (fast.P), and structure of  variables for algorithm (fast.V)
 %   smc:    smc-oopsi estimate of {P[X_t|F]}_{t<T}, where X={n,C} or {n,C,h}, (smc.E), parameter estimates (smc.P), and structure of variables for algorithm (fast.V)
 
+%% check data
+
+if any(isnan(F));
+    error('nan in your data')
+end
+
+
 %% set code Variables
 
 if nargin < 2, V = struct;   end         % create structure for algorithmic variables, if none provided
@@ -63,6 +70,8 @@ if V.save == 1
     V.name_dat = [fdat V.name];                                 % filename for data
     save(V.name_dat,'V')
 end
+
+
 
 %% preprocess - remove the lowest 10 frequencies
 
