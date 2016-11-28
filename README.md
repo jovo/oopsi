@@ -1,6 +1,10 @@
 ### better algorithm now available
 
-https://github.com/zhoupc/OASIS_matlab
+- https://github.com/j-friedrich/OASIS
+- https://github.com/zhoupc/OASIS_matlab
+
+imho, there is no reason to use this repo anymore, it is merely for archival purposes, 
+i recommend instead that you use the above codes for python and matlab.
 
 ### oopsi algorithm info
 
