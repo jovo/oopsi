@@ -1,20 +1,14 @@
-### better algorithm now available
+### better algorithm/implementation for fast-oopsi now available
 
 - https://github.com/j-friedrich/OASIS
 - https://github.com/zhoupc/OASIS_matlab
 
-imho, there is no reason to use this repo anymore, it is merely for archival purposes, 
-i recommend instead that you use the above codes for python and matlab.
+imho, there is no reason to use this repo anymore unless you really want to use the particle filter based approach, 
+i recommend that you use the above codes for python and matlab.
 
 ### oopsi algorithm info
 
 This is a repo containing the most current code for doing model-based spike train inference from calcium imaging.  Manuscripts explaining the theory and providing some results on simulated and real data are available from the fast-oopsi, smc-oopsi, and pop-oopsi github repositories.  Those repositories also contain code that you may run and data to download to play with things.  Any question, ask them in the issues tab.  Please let me know of any positive or negative experiences.  Much Obliged, jovo
-
-Note that there are two python implementations of fast-oopsi (foopsi) that i expect to work better and faster:
-https://github.com/liubenyuan/py-oopsi
-and
-https://github.com/alimuldal/PyFNND.
-
 
 A question we often get is: "how shall we interpret the output? probability of spiking? instantaneous firing rate??
 
