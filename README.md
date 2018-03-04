@@ -1,10 +1,23 @@
 ### better algorithm/implementation for fast-oopsi now available
 
+- https://cran.r-project.org/web/packages/LZeroSpikeInference/index.html
+
+I recommend the above and the background reading associated with it:
+- https://arxiv.org/abs/1802.07380
+- https://arxiv.org/abs/1703.08644
+
+Note that the algorithm they use is different from foopsi, but as far as i can tell, better.
+
+there are updated implementations of foopsi:
+
 - https://github.com/j-friedrich/OASIS
 - https://github.com/zhoupc/OASIS_matlab
 
+(though i am told that there is a bug in them).
+
+
 imho, there is no reason to use this repo anymore unless you really want to use the particle filter based approach, 
-i recommend that you use the above codes for python and matlab.
+i recommend that you use the above codes for R, python, and matlab. 
 
 ### oopsi algorithm info
 
