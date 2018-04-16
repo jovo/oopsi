@@ -1,19 +1,9 @@
 ### better algorithm/implementation for fast-oopsi now available
 
-- https://cran.r-project.org/web/packages/LZeroSpikeInference/index.html
-
-I recommend the above and the background reading associated with it:
-- https://arxiv.org/abs/1802.07380
-- https://arxiv.org/abs/1703.08644
-
-Note that the algorithm they use is different from foopsi, but as far as i can tell, better.
-
-there are updated implementations of foopsi:
-
-- https://github.com/j-friedrich/OASIS
-- https://github.com/zhoupc/OASIS_matlab
-
-(though i am told that there is a bug in them).
+- the standard toolbox for calcium imaging and analysis is [CaImAn](https://github.com/flatironinstitute/CaImAn), which extends our work in several nice ways (they have Python and MATLAB)
+- a very nice R package: https://cran.r-project.org/web/packages/LZeroSpikeInference/index.html, based on the following two articles
+  - https://arxiv.org/abs/1802.07380
+  - https://arxiv.org/abs/1703.08644
 
 
 imho, there is no reason to use this repo anymore unless you really want to use the particle filter based approach, 
